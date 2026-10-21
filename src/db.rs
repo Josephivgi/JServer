@@ -145,6 +145,24 @@ pub fn monitoring_enabled(conn: &Connection) -> bool {
     setting(conn, KEY_MONITORING).ok().flatten().is_none_or(|v| v != "0")
 }
 
+fn retry_key(alias: &str) -> String {
+    format!("retry:{alias}")
+}
+
+/// How many times Retry was pressed for one server.
+pub fn server_retry(conn: &Connection, alias: &str) -> i64 {
+    setting_i64(conn, &retry_key(alias), 0)
+}
+
+/// Retry for one server: the monitor logs in to it again now.
+pub fn bump_server_retry(conn: &Connection, alias: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        [retry_key(alias)],
+    )?;
+    Ok(())
+}
+
 pub fn bump_retry(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",

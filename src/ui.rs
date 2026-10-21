@@ -145,6 +145,11 @@ enum Tone {
     Danger,
 }
 
+/// The last login failed and the monitor is waiting for Retry.
+fn failed(status: &str) -> bool {
+    !matches!(status, "up" | "connecting" | "paused" | "")
+}
+
 fn tone_of(status: &str) -> Tone {
     match status {
         "up" => Tone::Ok,
@@ -575,18 +580,6 @@ fn button(ui: &mut Ui, t: &Tokens, label: &str) -> egui::Response {
     resp
 }
 
-/// `.icon-btn` with the restart icon.
-fn icon_button(ui: &mut Ui, t: &Tokens, enabled: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), if enabled { Sense::click() } else { Sense::hover() });
-    let hovered = enabled && resp.hovered();
-    if hovered {
-        ui.painter().rect_filled(rect, CornerRadius::same(7), t.well);
-    }
-    let color = if !enabled { t.muted.gamma_multiply(0.5) } else if hovered { t.ink } else { t.muted };
-    paint_restart(ui, rect.center(), 5.0, color);
-    resp
-}
-
 /// `.chip`: a small pill with a hairline border.
 fn chip(ui: &mut Ui, t: &Tokens, text: &str, color: Color32) {
     let border = if color == t.muted { t.line } else { color.gamma_multiply(0.45) };
@@ -1011,11 +1004,11 @@ impl App {
 
     fn retry_server(&mut self, alias: &str) {
         let _ = db::set_enabled(&self.conn, alias, true);
-        let _ = db::bump_retry(&self.conn);
+        let _ = db::bump_server_retry(&self.conn, alias);
         if !collector::is_running() {
             self.start_collector();
         }
-        self.toast = Some((format!("Checking {alias}"), Instant::now()));
+        self.toast = Some((format!("Trying {alias} again"), Instant::now()));
         self.last_live = None;
     }
 }
@@ -1035,9 +1028,6 @@ fn server_card(ui: &mut Ui, t: &Tokens, v: &View, host: Option<&sshconf::Host>, 
                 dot(ui, t, tone);
                 ui.label(RichText::new(&v.srv.alias).font(theme::bold_font(13.5)).color(t.ink));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icon_button(ui, t, v.srv.status != "connecting").on_hover_text(format!("Check {}", v.srv.alias)).clicked() {
-                        retry = true;
-                    }
                     let c = if tone == Tone::None { t.muted } else { tone_color(t, tone) };
                     ui.label(RichText::new(v.label()).size(12.0).color(c));
                 });
@@ -1094,6 +1084,10 @@ fn server_card(ui: &mut Ui, t: &Tokens, v: &View, host: Option<&sshconf::Host>, 
                 let hint = insights::connection_hint(&v.srv.status, &v.srv.alias);
                 if !hint.is_empty() {
                     ui.label(RichText::new(hint).size(12.0).color(t.muted));
+                }
+                ui.add_space(2.0);
+                if button(ui, t, "Retry").on_hover_text(format!("Log in to {} again", v.srv.alias)).clicked() {
+                    retry = true;
                 }
             } else if v.srv.status == "up" {
                 ui.label(RichText::new("Logged in. The first sample is on its way.").size(12.0).color(t.muted));
@@ -1474,7 +1468,7 @@ impl App {
                 {
                     toggle = true;
                 }
-                if enabled && icon_button(ui, t, status != "connecting").on_hover_text("Log in again now").clicked() {
+                if enabled && failed(&status) && button(ui, t, "Retry").on_hover_text("Log in again now").clicked() {
                     retry = true;
                 }
             });
@@ -2138,13 +2132,15 @@ impl App {
                 ui.label(RichText::new("Restarting").size(11.5).color(t.muted));
             }
             state => {
-                if ui.small_button("Check for updates").clicked() {
+                let label = if matches!(state, update::State::Failed(_)) { "Retry" } else { "Check for updates" };
+                if ui.small_button(label).clicked() {
                     self.update_installing = false;
                     self.updater.check(ui.ctx());
                 }
                 let note = match state {
                     update::State::Checking => Some("Checking for updates"),
                     update::State::UpToDate => Some("You have the latest version"),
+                    update::State::NoReleases => Some("No releases published yet"),
                     update::State::Failed(_) if self.update_installing => Some("The update was not installed"),
                     update::State::Failed(_) => Some("Could not check for updates"),
                     _ => None,

@@ -30,6 +30,8 @@ pub enum State {
     Idle,
     Checking,
     UpToDate,
+    /// The GitHub repo has no published release yet.
+    NoReleases,
     Available(Release),
     /// Bytes downloaded so far and the total.
     Downloading(u64, u64),
@@ -146,7 +148,8 @@ impl Updater {
             None => true,
             Some(t) => t.elapsed() >= CHECK_EVERY || (refocused && t.elapsed() >= CHECK_ON_FOCUS),
         };
-        if due && !matches!(self.state(), State::Available(_)) {
+        // A failed check waits for the Retry button instead of trying again on its own.
+        if due && !matches!(self.state(), State::Available(_) | State::Failed(_)) {
             self.check(ctx);
         }
     }
@@ -161,7 +164,8 @@ impl Updater {
         std::thread::spawn(move || {
             let s = match latest() {
                 Ok(Some(r)) if is_newer(&r.version, CURRENT) => State::Available(r),
-                Ok(_) => State::UpToDate,
+                Ok(Some(_)) => State::UpToDate,
+                Ok(None) => State::NoReleases,
                 Err(e) => {
                     collector::log(&format!("update check failed: {e}"));
                     State::Failed(e)

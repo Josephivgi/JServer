@@ -30,9 +30,9 @@ pub fn connection_hint(status: &str, alias: &str) -> &'static str {
         "down" => "There is no route to the server from this PC. Check that it is on and that your network can reach it.",
         "refused" => "The server answered but nothing is listening for SSH on that port.",
         "dns" => "The host name in ~/.ssh/config could not be looked up.",
-        "denied" => "The server did not accept your key. Check that the public key is in ~/.ssh/authorized_keys on the server for this user. JServer waits 15 minutes before trying again so fail2ban does not block you; press Refresh to try now.",
+        "denied" => "The server did not accept your key. Check that the public key is in ~/.ssh/authorized_keys on the server for this user. Fix that, then press Retry.",
         "hostkey" => "The server's host key is not in known_hosts, or it changed. JServer never accepts host keys by itself. Run ssh once in a terminal to check and accept it.",
-        "lost" => "The connection dropped. JServer reconnects by itself.",
+        "lost" => "The connection dropped and logging in again did not work. Press Retry when the server is back.",
         _ => "",
     }
 }

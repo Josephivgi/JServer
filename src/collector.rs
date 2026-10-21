@@ -155,30 +155,22 @@ fn now_f() -> f64 {
     chrono::Utc::now().timestamp_millis() as f64 / 1000.0
 }
 
-/// How long to wait before logging in again after a failure. A rejected key or
-/// host key will not fix itself, and retrying it often can get you banned by
-/// fail2ban, so those wait until Refresh or 15 minutes.
-fn backoff(f: &Failure, attempt: u32) -> Duration {
-    match f.status {
-        "denied" | "hostkey" => Duration::from_secs(15 * 60),
-        _ => Duration::from_secs((15u64 << attempt.min(5)).min(300)),
-    }
-}
-
-/// Sleeps up to `d`, waking early when stopped or when Refresh is pressed.
-fn wait(d: Duration, stop: &AtomicBool, retry: &AtomicI64) -> bool {
-    let generation = retry.load(Ordering::SeqCst);
-    let end = Instant::now() + d;
-    while Instant::now() < end {
+/// After a failed login, waits until the user presses Retry (on this server)
+/// or Refresh (all servers). Nothing is retried on a timer: a rejected key or
+/// an unreachable host will not fix itself, and retrying a rejected key over
+/// and over can get you banned by fail2ban.
+fn wait_for_retry(conn: &rusqlite::Connection, alias: &str, stop: &AtomicBool, retry: &AtomicI64) -> bool {
+    let all = retry.load(Ordering::SeqCst);
+    let mine = db::server_retry(conn, alias);
+    loop {
         if stop.load(Ordering::SeqCst) {
             return false;
         }
-        if retry.load(Ordering::SeqCst) != generation {
+        if retry.load(Ordering::SeqCst) != all || db::server_retry(conn, alias) != mine {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(500));
     }
-    !stop.load(Ordering::SeqCst)
 }
 
 #[derive(Default)]
@@ -199,44 +191,42 @@ fn worker(alias: &str, stop: &AtomicBool, retry: &AtomicI64) {
             return;
         }
     };
-    let mut attempt = 0u32;
+    // A connection that was working and dropped gets one reconnect straight away.
+    let mut reconnect = false;
     while !stop.load(Ordering::SeqCst) {
         let _ = db::set_status(&conn, alias, "connecting", "Connecting", "", now());
-        let (mut session, login_ms) = match Session::connect(alias, probe::SETUP) {
-            Ok((s, _, ms)) => (s, ms),
+        let login = Session::connect(alias, probe::SETUP).and_then(|(mut s, _, ms)| {
+            let info = probe::parse_info(&s.exec(probe::INFO, Duration::from_secs(40))?);
+            Ok((s, ms, info))
+        });
+        let (mut session, login_ms, info) = match login {
+            Ok(v) => v,
             Err(f) => {
                 let _ = db::set_status(&conn, alias, f.status, f.label, &f.detail, now());
-                log(&format!("{alias}: {} ({})", f.label, f.detail));
-                let d = backoff(&f, attempt);
-                attempt += 1;
-                if !wait(d, stop, retry) {
+                log(&format!("{alias}: {} ({}), waiting for Retry", f.label, f.detail));
+                reconnect = false;
+                if !wait_for_retry(&conn, alias, stop, retry) {
                     break;
                 }
-                continue;
-            }
-        };
-        let info = match session.exec(probe::INFO, Duration::from_secs(40)) {
-            Ok(l) => probe::parse_info(&l),
-            Err(f) => {
-                let _ = db::set_status(&conn, alias, f.status, f.label, &f.detail, now());
-                if !wait(backoff(&f, attempt), stop, retry) {
-                    break;
-                }
-                attempt += 1;
                 continue;
             }
         };
         let _ = db::set_connected(&conn, alias, &info, login_ms, now());
-        log(&format!("{alias}: connected in {login_ms} ms ({}, {} cores)", info.os, info.cores));
-        attempt = 0;
+        log(&format!("{alias}: connected in {login_ms} ms ({}, {} cores){}", info.os, info.cores, if reconnect { " after the connection dropped" } else { "" }));
         match monitor(alias, &mut conn, &mut session, info, stop) {
             Ok(()) => break,
             Err(f) => {
                 let _ = db::set_status(&conn, alias, f.status, f.label, &f.detail, now());
                 log(&format!("{alias}: {} during monitoring ({})", f.label, f.detail));
                 drop(session);
-                if !wait(Duration::from_secs(10), stop, retry) {
-                    break;
+                if reconnect {
+                    // It dropped again right after reconnecting: stop and wait for Retry.
+                    reconnect = false;
+                    if !wait_for_retry(&conn, alias, stop, retry) {
+                        break;
+                    }
+                } else {
+                    reconnect = true;
                 }
             }
         }
