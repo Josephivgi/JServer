@@ -67,7 +67,7 @@ impl Capture {
         add("50-overview-narrow", Page::Overview, 0.0, false, Some(egui::vec2(960.0, 640.0)));
         add("51-keys-narrow", Page::Keys, 500.0, false, Some(egui::vec2(960.0, 640.0)));
         let (tx, rx) = mpsc::channel();
-        for s in steps.iter_mut().filter(|s| s.name.starts_with('2')) {
+        for s in steps.iter_mut().filter(|s| s.name.contains("chart-hover")) {
             s.hover = Some(0.93);
         }
         Self { dir, steps, idx: 0, started: Instant::now(), settle_until: None, waiting: false, tx, rx }
@@ -485,6 +485,16 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // --capture: a real pointer move over the CPU chart, so hovering goes through egui like a mouse.
+        if let Some(f) = self.capture_hover {
+            if let Some(r) = ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("cpu_chart_rect"))) {
+                let pos = Pos2::new(r.left() + r.width() * f as f32, r.top() + r.height() * 0.6);
+                raw.events.push(egui::Event::PointerMoved(pos));
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.capture_tick(ui.ctx());
         self.refresh();
@@ -1652,11 +1662,10 @@ impl App {
                 let x_range = Some((now - self.range.secs(), now));
                 let gap = (bucket * 3).max(30);
                 let marker = self.hover_moment;
-                let force_hover = self.capture_hover;
                 let mut hovered = None;
                 let alias_s = alias.to_string();
                                 ui.columns(2, |c| {
-                    let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket, force_hover };
+                    let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket };
                     let (a, ha) = time_chart(&mut c[0], t, spec("cpu", "CPU", pct_fmt, Some(100.0), Tip::Cpu), &[("CPU", &cpu, t.accent)], &mut self.tips, &self.conn, &alias_s);
                     let (b, hb) = time_chart(&mut c[1], t, spec("mem", "Memory", pct_fmt, Some(100.0), Tip::Mem), &[("Memory", &mem, t.accent)], &mut self.tips, &self.conn, &alias_s);
                     c[0].add_space(8.0);
@@ -1894,8 +1903,6 @@ struct ChartSpec<'a> {
     marker: Option<i64>,
     tip: Tip,
     bucket: i64,
-    /// --capture only: hover at this fraction of the time range.
-    force_hover: Option<f64>,
 }
 
 #[derive(Default)]
@@ -2007,14 +2014,7 @@ fn time_chart(
             if let Some(m) = spec.marker {
                 p.vline(VLine::new("marker", m as f64).color(t.muted.gamma_multiply(0.5)).width(1.0));
             }
-            let hover = if p.response().hovered() {
-                p.pointer_coordinate().and_then(|c| nearest(main, c.x, spec.gap))
-            } else if let Some(f) = spec.force_hover {
-                // --capture: pretend the pointer is at this fraction of the chart.
-                spec.x_range.and_then(|(a, b)| nearest(main, a as f64 + (b - a) as f64 * f, spec.gap * 1000))
-            } else {
-                None
-            };
+            let hover = if p.response().hovered() { p.pointer_coordinate().and_then(|c| nearest(main, c.x, spec.gap)) } else { None };
             // Every chart shows the moment being hovered, on this chart or another one.
             let focus = hover.map(|h| h.0).or_else(|| spec.marker.and_then(|m| nearest(main, m as f64, spec.gap).map(|h| h.0)));
             if let Some(ts) = focus {
@@ -2029,15 +2029,17 @@ fn time_chart(
             (clicked, hover, focus)
         });
         let (clicked, hover, focus) = resp.inner;
+        if spec.id == "cpu" {
+            // --capture moves the real pointer here to test hovering.
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("cpu_chart_rect"), resp.response.rect));
+        }
         if let Some(ts) = focus {
             readout(ui, t, &spec, &resp.transform, ts, series);
         }
         if let Some((ts, _)) = hover {
             if spec.tip != Tip::None {
                 // Shown right away, not after the pointer rests like a normal tooltip.
-                let tip = egui::Tooltip::for_widget(&resp.response);
-                let tip = if spec.force_hover.is_some() { tip } else { tip.at_pointer() };
-                tip.show(|ui| tip_ui(ui, t, &spec, ts, tips, conn, alias));
+                egui::Tooltip::for_widget(&resp.response).at_pointer().show(|ui| tip_ui(ui, t, &spec, ts, tips, conn, alias));
             }
         }
         (clicked, hover.map(|h| h.0))
