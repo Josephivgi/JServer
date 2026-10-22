@@ -24,6 +24,7 @@ pub fn run_capture(dir: std::path::PathBuf) -> Result<(), String> {
 }
 
 struct Step {
+    hover: Option<f64>,
     name: String,
     page: Page,
     scroll: f32,
@@ -45,13 +46,17 @@ struct Capture {
 impl Capture {
     fn new(dir: std::path::PathBuf) -> Self {
         let mut steps = Vec::new();
-        let mut add = |name: &str, page: Page, scroll: f32, dark: bool, size: Option<egui::Vec2>| steps.push(Step { name: name.into(), page, scroll, dark, size });
+        let mut add = |name: &str, page: Page, scroll: f32, dark: bool, size: Option<egui::Vec2>| steps.push(Step { hover: None, name: name.into(), page, scroll, dark, size });
         add("01-overview", Page::Overview, 0.0, false, None);
         add("02-overview-keys", Page::Overview, 700.0, false, None);
         for (i, a) in sshconf::aliases().iter().enumerate() {
             for (j, off) in [0.0, 600.0, 1200.0, 1800.0].iter().enumerate() {
                 add(&format!("1{i}-{a}-{j}"), Page::Server(a.clone()), *off, false, None);
             }
+        }
+        if let Some(a) = sshconf::aliases().into_iter().nth(1) {
+            add("20-chart-hover", Page::Server(a.clone()), 1500.0, false, None);
+            add("21-chart-hover-dark", Page::Server(a), 1500.0, true, None);
         }
         add("30-keys", Page::Keys, 0.0, false, None);
         add("31-keys-table", Page::Keys, 600.0, false, None);
@@ -62,6 +67,9 @@ impl Capture {
         add("50-overview-narrow", Page::Overview, 0.0, false, Some(egui::vec2(960.0, 640.0)));
         add("51-keys-narrow", Page::Keys, 500.0, false, Some(egui::vec2(960.0, 640.0)));
         let (tx, rx) = mpsc::channel();
+        for s in steps.iter_mut().filter(|s| s.name.starts_with('2')) {
+            s.hover = Some(0.93);
+        }
         Self { dir, steps, idx: 0, started: Instant::now(), settle_until: None, waiting: false, tx, rx }
     }
 }
@@ -234,6 +242,7 @@ struct App {
     show_update_notes: bool,
 
     show_all_groups: bool,
+    capture_hover: Option<f64>,
     capture: Option<Capture>,
     /// Scroll position forced by --capture.
     scroll_override: Option<f32>,
@@ -278,6 +287,7 @@ impl App {
             update_installing: false,
             show_update_notes: false,
             show_all_groups: false,
+            capture_hover: None,
             capture: None,
             scroll_override: None,
         };
@@ -447,6 +457,7 @@ impl App {
             None => {
                 self.page = step.page.clone();
                 self.scroll_override = Some(step.scroll);
+                self.capture_hover = step.hover;
                 ctx.set_theme(if step.dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(step.size.unwrap_or(egui::vec2(1240.0, 820.0))));
                 self.range_dirty = true;
@@ -1641,10 +1652,11 @@ impl App {
                 let x_range = Some((now - self.range.secs(), now));
                 let gap = (bucket * 3).max(30);
                 let marker = self.hover_moment;
+                let force_hover = self.capture_hover;
                 let mut hovered = None;
                 let alias_s = alias.to_string();
                                 ui.columns(2, |c| {
-                    let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket };
+                    let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket, force_hover };
                     let (a, ha) = time_chart(&mut c[0], t, spec("cpu", "CPU", pct_fmt, Some(100.0), Tip::Cpu), &[("CPU", &cpu, t.accent)], &mut self.tips, &self.conn, &alias_s);
                     let (b, hb) = time_chart(&mut c[1], t, spec("mem", "Memory", pct_fmt, Some(100.0), Tip::Mem), &[("Memory", &mem, t.accent)], &mut self.tips, &self.conn, &alias_s);
                     c[0].add_space(8.0);
@@ -1882,6 +1894,8 @@ struct ChartSpec<'a> {
     marker: Option<i64>,
     tip: Tip,
     bucket: i64,
+    /// --capture only: hover at this fraction of the time range.
+    force_hover: Option<f64>,
 }
 
 #[derive(Default)]
@@ -1993,43 +2007,90 @@ fn time_chart(
             if let Some(m) = spec.marker {
                 p.vline(VLine::new("marker", m as f64).color(t.muted.gamma_multiply(0.5)).width(1.0));
             }
-            let hover = if p.response().hovered() { p.pointer_coordinate().and_then(|c| nearest(main, c.x, spec.gap)) } else { None };
-            if let Some((ts, v)) = hover {
+            let hover = if p.response().hovered() {
+                p.pointer_coordinate().and_then(|c| nearest(main, c.x, spec.gap))
+            } else if let Some(f) = spec.force_hover {
+                // --capture: pretend the pointer is at this fraction of the chart.
+                spec.x_range.and_then(|(a, b)| nearest(main, a as f64 + (b - a) as f64 * f, spec.gap * 1000))
+            } else {
+                None
+            };
+            // Every chart shows the moment being hovered, on this chart or another one.
+            let focus = hover.map(|h| h.0).or_else(|| spec.marker.and_then(|m| nearest(main, m as f64, spec.gap).map(|h| h.0)));
+            if let Some(ts) = focus {
                 p.vline(VLine::new("hover", ts as f64).color(t.muted).width(1.0));
-                p.points(Points::new("hover point", vec![[ts as f64, v]]).radius(4.0).color(series[0].2).filled(true));
+                for (n, pts, c) in series {
+                    if let Some((pt, v)) = nearest(pts, ts as f64, spec.gap) {
+                        p.points(Points::new(format!("{n} point"), vec![[pt as f64, v]]).radius(4.0).color(*c).filled(true));
+                    }
+                }
             }
             let clicked = if p.response().clicked() { p.pointer_coordinate().map(|c| c.x as i64) } else { None };
-            (clicked, hover)
+            (clicked, hover, focus)
         });
-        let (clicked, hover) = resp.inner;
+        let (clicked, hover, focus) = resp.inner;
+        if let Some(ts) = focus {
+            readout(ui, t, &spec, &resp.transform, ts, series);
+        }
         if let Some((ts, _)) = hover {
-            let values: Vec<(String, String, Color32)> = series
-                .iter()
-                .filter_map(|(n, pts, c)| nearest(pts, ts as f64, spec.gap).map(|(_, v)| (n.to_string(), (spec.value_fmt)(v), *c)))
-                .collect();
-            resp.response.on_hover_ui_at_pointer(|ui| tip_ui(ui, t, &spec, ts, &values, tips, conn, alias));
+            if spec.tip != Tip::None {
+                // Shown right away, not after the pointer rests like a normal tooltip.
+                let tip = egui::Tooltip::for_widget(&resp.response);
+                let tip = if spec.force_hover.is_some() { tip } else { tip.at_pointer() };
+                tip.show(|ui| tip_ui(ui, t, &spec, ts, tips, conn, alias));
+            }
         }
         (clicked, hover.map(|h| h.0))
     })
     .inner
 }
 
+/// The time and values at `ts`, drawn on the chart next to the hover line.
+fn readout(ui: &Ui, t: &Tokens, spec: &ChartSpec, transform: &egui_plot::PlotTransform, ts: i64, series: &[(&str, &Vec<(i64, f64)>, Color32)]) {
+    let frame = *transform.frame();
+    let mut rows: Vec<(String, Option<Color32>)> = vec![(fmt::local(ts).format("%a %H:%M:%S").to_string(), None)];
+    for (n, pts, c) in series {
+        if let Some((_, v)) = nearest(pts, ts as f64, spec.gap) {
+            let label = if series.len() > 1 { format!("{n}  {}", (spec.value_fmt)(v)) } else { (spec.value_fmt)(v) };
+            rows.push((label, Some(*c)));
+        }
+    }
+    let painter = ui.painter_at(frame);
+    let galleys: Vec<_> = rows
+        .iter()
+        .map(|(text, key)| match key {
+            None => painter.layout_no_wrap(text.clone(), theme::font(11.5), t.muted),
+            Some(_) => painter.layout_no_wrap(text.clone(), theme::bold_font(12.5), t.ink),
+        })
+        .collect();
+    let keyed = series.len() > 1;
+    let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max) + 16.0 + if keyed { 10.0 } else { 0.0 };
+    let h = galleys.iter().map(|g| g.size().y + 1.0).sum::<f32>() + 10.0;
+    let x = transform.position_from_point_x(ts as f64);
+    let left = if x + 10.0 + w > frame.right() { x - 10.0 - w } else { x + 10.0 };
+    let rect = Rect::from_min_size(Pos2::new(left.max(frame.left() + 2.0), frame.top() + 4.0), vec2(w, h));
+    painter.rect(rect, CornerRadius::same(6), t.surface, Stroke::new(1.0, t.line), egui::StrokeKind::Inside);
+    let mut y = rect.top() + 5.0;
+    for (g, (_, key)) in galleys.into_iter().zip(&rows) {
+        let mut gx = rect.left() + 8.0;
+        let gh = g.size().y;
+        if let (true, Some(c)) = (keyed, key) {
+            // Color key for each line when the chart has more than one.
+            painter.circle_filled(Pos2::new(gx + 3.0, y + gh / 2.0), 3.0, *c);
+            gx += 10.0;
+        }
+        painter.galley(Pos2::new(gx, y), g, t.ink);
+        y += gh + 1.0;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn tip_ui(ui: &mut Ui, t: &Tokens, spec: &ChartSpec, ts: i64, values: &[(String, String, Color32)], tips: &mut TipCache, conn: &Connection, alias: &str) {
+fn tip_ui(ui: &mut Ui, t: &Tokens, spec: &ChartSpec, ts: i64, tips: &mut TipCache, conn: &Connection, alias: &str) {
     ui.set_min_width(250.0);
     let bucket = spec.bucket.max(1);
     let from = ts - ts.rem_euclid(bucket);
     let when = if bucket < 60 { fmt::day_time(ts) } else { format!("{} to {}", fmt::day_time(from), fmt::local(from + bucket).format("%H:%M")) };
     ui.label(RichText::new(when).size(12.0).color(t.muted));
-    for (n, v, c) in values {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(n).size(12.5).color(*c));
-            ui.label(RichText::new(v).font(theme::bold_font(12.5)).color(t.ink));
-        });
-    }
-    if spec.tip == Tip::None {
-        return;
-    }
     let a_from = from - from.rem_euclid(60);
     let a_to = (from + bucket).max(a_from + 60) - 1;
     let (groups, minutes) = tips.get(conn, alias, a_from, a_to);
