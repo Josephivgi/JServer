@@ -21,6 +21,20 @@ It is JPerformance for servers.
 - Only public key files (`*.pub`) are read.
 - Data stays on your PC in `%APPDATA%\JServer\jserver.db` (SQLite). History older than 30 days is removed.
 
+## Install on Windows
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/Josephivgi/JServer/master/install.ps1 | iex
+```
+
+It downloads the latest release from GitHub, adds it to the Start Menu, and pins it to the taskbar. No administrator rights are needed, and Windows does not show the "Windows protected your PC" warning. To install every JSystems app (Simple Recorder, JAgents, JPerformance, JServer) at once:
+
+```powershell
+$env:JSYSTEMS_APPS='all'; irm https://raw.githubusercontent.com/Josephivgi/JServer/master/install.ps1 | iex
+```
+
 ## Requirements
 
 Windows 10 or 11 with the OpenSSH client (`ssh.exe`, built in), and hosts in `~/.ssh/config` that you can log in to with a key and no password prompt. Servers must run Linux.
