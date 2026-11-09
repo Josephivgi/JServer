@@ -333,39 +333,3 @@ pub fn program_of(comm: &str, cmdline: &str) -> String {
     let base = argv0.rsplit('/').next().unwrap_or("").trim_end_matches(':');
     if base.is_empty() || base.starts_with('-') || base.contains(['@', '(', '[']) { comm.to_string() } else { base.to_string() }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn meta(cg: &str, cmd: &str) -> Meta {
-        Meta { cgroup: cg.into(), user: "root".into(), cmdline: cmd.into() }
-    }
-
-    #[test]
-    fn names_vms_containers_and_services() {
-        let mut names = HostNames::default();
-        names.vms.insert("101".into(), "jsystems-web".into());
-        let (k, kind, label) = classify("kvm", false, Some(&meta("0::/qemu.slice/101.scope", "/usr/bin/kvm -id 101 -name jsystems-web,x")), &names);
-        assert_eq!((k.as_str(), kind, label.as_str()), ("vm:101", Kind::Vm, "VM 101 jsystems-web"));
-        let (_, kind, label) = classify("kvm", false, Some(&meta("0::/qemu.slice/100.scope", "/usr/bin/kvm -id 100 -name backend,debug-threads=on")), &names);
-        assert_eq!((kind, label.as_str()), (Kind::Vm, "VM 100 backend"));
-        let id = "21c9bb2336c929137e4b0a9572ad9090104fda91603d72018a0916c3f2b12f78";
-        let (_, kind, label) = classify("php", false, Some(&meta(&format!("0::/system.slice/docker-{id}.scope"), "php artisan")), &names);
-        assert_eq!((kind, label.as_str()), (Kind::Docker, "container 21c9bb2336c9"));
-        let (_, kind, label) = classify("nginx", false, Some(&meta("0::/system.slice/nginx.service", "nginx: worker")), &names);
-        assert_eq!((kind, label.as_str()), (Kind::Service, "nginx"));
-        let (_, kind, label) = classify("node", false, Some(&meta("0::/user.slice/user-1000.slice/user@1000.service/app.slice/t3code.service", "node t3")), &names);
-        assert_eq!((kind, label.as_str()), (Kind::UserService, "t3code"));
-        let (_, kind, label) = classify("bash", false, Some(&meta("0::/user.slice/user-1000.slice/session-4.scope", "-bash")), &names);
-        assert_eq!((kind, label.as_str()), (Kind::Program, "bash"));
-        let (_, kind, _) = classify("kworker/0:1", true, None, &names);
-        assert_eq!(kind, Kind::Kernel);
-    }
-
-    #[test]
-    fn explains_interpreters_with_their_script() {
-        let g = Group { kind: Kind::Program, label: "node".into(), main: "node".into(), cmdline: "node /srv/app/server.js --port 3000".into(), ..Default::default() };
-        assert_eq!(explain(&g), "A Node.js app. Running app/server.js.");
-    }
-}

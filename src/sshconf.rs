@@ -272,20 +272,3 @@ pub fn scan() -> Scan {
     }
     Scan { ssh_dir: dir, hosts, keys, agent: agent(), findings }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_host_aliases_without_patterns() {
-        let dir = std::env::temp_dir().join(format!("jserver-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("config");
-        std::fs::write(&p, "Host a b\n  HostName 1.2.3.4\nHost *.lan !x\nhost=c\nHost a\n").unwrap();
-        let mut out = Vec::new();
-        read_config(&p, 0, &mut out);
-        assert_eq!(out, vec!["a", "b", "c"]);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-}

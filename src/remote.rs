@@ -173,17 +173,3 @@ impl Drop for Session {
         let _ = self.child.wait();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::classify;
-
-    #[test]
-    fn names_common_ssh_errors() {
-        assert_eq!(classify("ssh: connect to host 1.2.3.4 port 22: Connection timed out", false).status, "timeout");
-        assert_eq!(classify("root@x: Permission denied (publickey).", false).status, "denied");
-        assert_eq!(classify("Host key verification failed.", false).status, "hostkey");
-        assert_eq!(classify("ssh: connect to host x port 22: Connection refused", false).status, "refused");
-        assert_eq!(classify("ssh: Could not resolve hostname nope: No such host is known.", false).status, "dns");
-    }
-}

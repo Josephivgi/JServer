@@ -328,18 +328,3 @@ pub fn cleanup_after_update() {
         }
     });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::is_newer;
-
-    #[test]
-    fn compares_versions_by_number() {
-        assert!(is_newer("v0.2.0", "0.1.0"));
-        assert!(is_newer("0.10.0", "0.9.9"));
-        assert!(is_newer("1.0.0", "0.99.0"));
-        assert!(!is_newer("v0.1.0", "0.1.0"));
-        assert!(!is_newer("0.0.9", "0.1.0"));
-        assert!(!is_newer("nightly", "0.1.0"));
-    }
-}

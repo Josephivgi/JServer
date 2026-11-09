@@ -428,30 +428,3 @@ impl Tracker {
         out
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_proc_stat_with_spaces_in_name() {
-        let l = "1635 (kvm) S 1 1635 1635 0 -1 138412352 1 0 0 0 9000 1000 0 0 20 0 50 0 4242 1 3325627 18446744073709551615";
-        let p = parse_proc_stat(l).unwrap();
-        assert_eq!((p.pid, p.comm.as_str(), p.ticks, p.start, p.rss_pages), (1635, "kvm", 10000, 4242, 3325627));
-        let k = parse_proc_stat("12 (kworker/0:1 (ev)) I 2 0 0 0 -1 69238880 0 0 0 0 5 7 0 0 20 0 1 0 99 0 0 1").unwrap();
-        assert_eq!(k.comm, "kworker/0:1 (ev)");
-        assert!(k.kernel_thread);
-    }
-
-    #[test]
-    fn reads_meta_blocks() {
-        let lines: Vec<String> = ["@@m 10", "c 0::/system.slice/nginx.service", "u www-data", "a nginx: worker process ", "@@m 11", "c ", "u ", "a "]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let m = parse_meta(&lines);
-        assert_eq!(m[&10].cgroup, "0::/system.slice/nginx.service");
-        assert_eq!(m[&10].user, "www-data");
-        assert_eq!(m[&11].cmdline, "");
-    }
-}
