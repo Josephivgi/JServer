@@ -242,6 +242,12 @@ fn worker(alias: &str, stop: &AtomicBool, retry: &AtomicI64) {
         Ok(c) => c,
         Err(e) => {
             log(&format!("{alias}: could not open database: {e}"));
+            // The main loop starts a new worker when this one ends; wait a
+            // little first so a locked database does not flood the log.
+            let end = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < end && !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
             return;
         }
     };

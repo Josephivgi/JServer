@@ -53,7 +53,9 @@ pub fn compute(conn: &Connection, server: &db::Server, from: i64, to: i64) -> db
 
     if !matches!(server.status.as_str(), "up" | "connecting" | "paused" | "") {
         let hint = connection_hint(&server.status, alias);
-        add(&mut out, Level::Danger, format!("Cannot log in: {}", server.label.to_lowercase()), if hint.is_empty() { server.detail.clone() } else { hint.to_string() });
+        // Network failures retry by themselves, so they are a warning; a rejected key needs you.
+        let level = if crate::collector::retries_by_itself(&server.status) { Level::Warn } else { Level::Danger };
+        add(&mut out, level, format!("Cannot log in: {}", server.label.to_lowercase()), if hint.is_empty() { server.detail.clone() } else { hint.to_string() });
     }
 
     let latest = db::latest(conn, alias)?.filter(|p| now - p.ts < 120);

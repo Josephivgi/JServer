@@ -75,14 +75,17 @@ impl Capture {
 }
 
 fn run_with(capture: Option<Capture>) -> Result<(), String> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("JServer")
-            .with_inner_size([1240.0, 820.0])
-            .with_min_inner_size([960.0, 620.0])
-            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("JServer")
+        .with_inner_size([1240.0, 820.0])
+        .with_min_inner_size([960.0, 620.0])
+        .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default());
+    if capture.is_some() {
+        // --capture draws off-screen, with no taskbar button and without taking
+        // focus, so checking the UI never pops a window up on the desktop.
+        viewport = viewport.with_position([-20_000.0, -20_000.0]).with_taskbar(false).with_active(false);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
         "JServer",
         options,
@@ -1251,7 +1254,7 @@ impl App {
                     if !narrow {
                         cells.push(Box::new(|ui: &mut Ui| {
                             let fp = if k.fingerprint.is_empty() { &k.error } else { &k.fingerprint };
-                            ui.add(egui::Label::new(RichText::new(fp).font(theme::mono(12.0)).color(t.muted)).truncate()).on_hover_text(fp);
+                            ui.add(egui::Label::new(RichText::new(fp).font(theme::mono(12.0)).color(t.muted)).truncate());
                         }));
                     }
                     let go_ref = &mut go;
@@ -1430,7 +1433,7 @@ fn tile(ui: &mut Ui, t: &Tokens, label: &str, value: &str, sub: &str, pct: Optio
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.label(RichText::new(label).size(12.0).color(t.muted));
         ui.label(RichText::new(value).font(theme::bold_font(21.0)).color(t.ink));
-        ui.add(egui::Label::new(RichText::new(if sub.is_empty() { " " } else { sub }).size(11.5).color(t.muted)).truncate()).on_hover_text(sub);
+        ui.add(egui::Label::new(RichText::new(if sub.is_empty() { " " } else { sub }).size(11.5).color(t.muted)).truncate());
         ui.add_space(4.0);
         match pct {
             Some(p) => bar(ui, t, p, theme::level(t, p), 4.0),
@@ -1669,7 +1672,7 @@ impl App {
                 let marker = self.hover_moment;
                 let mut hovered = None;
                 let alias_s = alias.to_string();
-                                ui.columns(2, |c| {
+                ui.columns(2, |c| {
                     let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket };
                     let (a, ha) = time_chart(&mut c[0], t, spec("cpu", "CPU", pct_fmt, Some(100.0), Tip::Cpu), &[("CPU", &cpu, t.accent)], &mut self.tips, &self.conn, &alias_s);
                     let (b, hb) = time_chart(&mut c[1], t, spec("mem", "Memory", pct_fmt, Some(100.0), Tip::Mem), &[("Memory", &mem, t.accent)], &mut self.tips, &self.conn, &alias_s);
@@ -1816,7 +1819,7 @@ fn groups_table(ui: &mut Ui, t: &Tokens, groups: &[db::LiveGroup], sort: Sort, t
                             });
                             ui.label(RichText::new(&g.explain).size(12.5).color(t.muted));
                             if !g.cmdline.is_empty() {
-                                ui.add(egui::Label::new(RichText::new(&g.cmdline).font(theme::mono(11.0)).color(t.muted)).truncate()).on_hover_text(&g.cmdline);
+                                ui.add(egui::Label::new(RichText::new(&g.cmdline).font(theme::mono(11.0)).color(t.muted)).truncate());
                             }
                         });
                     });
