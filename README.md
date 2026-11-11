@@ -6,7 +6,7 @@ It is JPerformance for servers.
 
 ## What it does
 
-- **Servers**: every host in `~/.ssh/config` gets a card with CPU, memory, disk and swap, uptime, and what is using the most memory and CPU right now. Hosts reached through a `ProxyJump` work too.
+- **Servers**: every host in `~/.ssh/config` gets a card with CPU, memory (what programs use, and what Linux and ZFS hold as cache, which they give back when needed), disk and swap, uptime, and what is using the most memory and CPU right now. Hosts reached through a `ProxyJump` work too.
 - **One server**: CPU, memory, swap, load, network and disk I/O, a memory breakdown (programs, ZFS cache, file cache, free), and a ranked list of what is using the server. Processes are grouped by what started them: a Proxmox VM ("VM 100 backend-services"), an LXC or Docker container, a systemd service, or a program. Each one gets a short explanation of what it is.
 - **History**: CPU, memory, load, network and disk I/O charts for the last hour up to 30 days. Hover a chart to see the numbers on every chart at that moment, and what was running.
 - **Findings**: memory running low, out-of-memory kills, disks filling up, long CPU load, waiting on disk, CPU taken by the VM host, a pending reboot, and logins that fail.

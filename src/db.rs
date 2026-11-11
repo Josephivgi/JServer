@@ -405,8 +405,30 @@ impl Point {
     pub fn mem_used(&self) -> f64 {
         (self.mem_total - self.mem_avail).max(0.0)
     }
-    pub fn mem_pct(&self) -> f64 {
-        if self.mem_total > 0.0 { self.mem_used() / self.mem_total * 100.0 } else { 0.0 }
+    /// ZFS cache (ARC). Linux counts it as used, but ZFS gives it back when programs need it.
+    pub fn zfs_cache(&self) -> f64 {
+        self.arc.min(self.mem_used()).max(0.0)
+    }
+    /// Linux's own file cache, freed as soon as programs need the memory.
+    pub fn file_cache(&self) -> f64 {
+        (self.mem_avail - self.mem_free).max(0.0)
+    }
+    /// Memory that programs really hold: used, minus the ZFS cache.
+    pub fn programs(&self) -> f64 {
+        (self.mem_used() - self.zfs_cache()).max(0.0)
+    }
+    /// All memory Linux is using as cache (file cache plus ZFS cache).
+    pub fn caches(&self) -> f64 {
+        self.file_cache() + self.zfs_cache()
+    }
+    fn share(&self, v: f64) -> f64 {
+        if self.mem_total > 0.0 { v / self.mem_total * 100.0 } else { 0.0 }
+    }
+    pub fn programs_pct(&self) -> f64 {
+        self.share(self.programs())
+    }
+    pub fn caches_pct(&self) -> f64 {
+        self.share(self.caches())
     }
     pub fn swap_pct(&self) -> f64 {
         if self.swap_total > 0.0 { self.swap_used / self.swap_total * 100.0 } else { 0.0 }

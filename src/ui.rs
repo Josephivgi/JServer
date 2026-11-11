@@ -631,6 +631,53 @@ fn meter(ui: &mut Ui, t: &Tokens, label: &str, pct: f64, text: &str) {
     bar(ui, t, p, theme::level(t, p), 6.0);
 }
 
+/// Light color for memory Linux uses as cache (it gives it back when programs need it).
+fn cache_color(t: &Tokens) -> Color32 {
+    t.accent.gamma_multiply(0.35)
+}
+
+/// The memory meter: programs in the level color, then Linux's caches in a
+/// lighter shade, so a big cache does not look like a full server.
+fn memory_meter(ui: &mut Ui, t: &Tokens, p: &db::Point) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Memory").size(12.0).color(t.muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(format!("cache · {}", gb(p.mem_total))).size(12.0).color(t.muted));
+            ui.label(RichText::new(gb(p.caches())).size(12.0).color(t.ink));
+            ui.label(RichText::new("used ·").size(12.0).color(t.muted));
+            ui.label(RichText::new(gb(p.programs())).size(12.0).color(t.ink));
+        });
+    })
+    .response
+    .on_hover_text(format!(
+        "Programs {} · file cache {} · ZFS cache {} · free {}. Linux gives cache back when programs need it.",
+        gb(p.programs()),
+        gb(p.file_cache()),
+        gb(p.zfs_cache()),
+        gb(p.mem_free.max(0.0))
+    ));
+    ui.add_space(-3.0);
+    stacked_bar(ui, t, p.programs_pct(), p.caches_pct(), 6.0);
+}
+
+/// A bar with a solid part (`a` percent) followed by a light part (`b` percent).
+fn stacked_bar(ui: &mut Ui, t: &Tokens, a: f64, b: f64, h: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+    let r = CornerRadius::same(255);
+    ui.painter().rect_filled(rect, r, t.well);
+    let a = a.clamp(0.0, 100.0);
+    let b = b.clamp(0.0, 100.0 - a);
+    let wb = rect.width() * ((a + b) / 100.0) as f32;
+    if wb > 0.5 {
+        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(wb.max(h), h)), r, cache_color(t));
+    }
+    let wa = rect.width() * (a / 100.0) as f32;
+    if wa > 0.5 {
+        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(wa.max(h), h)), r, theme::level(t, a));
+    }
+}
+
 fn bar(ui: &mut Ui, t: &Tokens, pct: f64, color: Color32, h: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
     let r = CornerRadius::same(255);
@@ -1065,7 +1112,7 @@ fn server_card(ui: &mut Ui, t: &Tokens, v: &View, host: Option<&sshconf::Host>, 
             if let Some(p) = v.fresh() {
                 let cores = v.srv.cores.max(1);
                 meter(ui, t, "CPU", p.cpu, &format!("{} · load {:.2} / {} cores", fmt::pct(p.cpu), p.load1, cores));
-                meter(ui, t, "Memory", p.mem_pct(), &format!("{} of {}", gb(p.mem_used()), gb(p.mem_total)));
+                memory_meter(ui, t, p);
                 if let Some(root) = v.mounts.iter().find(|m| m.mount == "/").or(v.mounts.first()) {
                     meter(ui, t, &format!("Disk {}", root.mount), root.pct(), &format!("{} free of {}", gb(root.avail), gb(root.size)));
                 }
@@ -1426,8 +1473,8 @@ impl App {
 
 // ---------- one server ----------
 
-/// Big-number tile used on the server page.
-fn tile(ui: &mut Ui, t: &Tokens, label: &str, value: &str, sub: &str, pct: Option<f64>) {
+/// Big-number tile used on the server page. `pct` is (filled, light part after it).
+fn tile(ui: &mut Ui, t: &Tokens, label: &str, value: &str, sub: &str, pct: Option<(f64, f64)>) {
     theme::card(t).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -1436,7 +1483,7 @@ fn tile(ui: &mut Ui, t: &Tokens, label: &str, value: &str, sub: &str, pct: Optio
         ui.add(egui::Label::new(RichText::new(if sub.is_empty() { " " } else { sub }).size(11.5).color(t.muted)).truncate());
         ui.add_space(4.0);
         match pct {
-            Some(p) => bar(ui, t, p, theme::level(t, p), 4.0),
+            Some((p, light)) => stacked_bar(ui, t, p, light, 4.0),
             None => {
                 ui.add_space(4.0);
             }
@@ -1549,16 +1596,16 @@ impl App {
 
                 if let Some(p) = &fresh {
                     let cores = v.srv.cores.max(1) as f64;
-                    let tiles: [(&str, String, String, Option<f64>); 6] = [
-                        ("CPU", fmt::pct(p.cpu), format!("waiting on disk {} · taken by host {}", fmt::pct(p.iowait), fmt::pct(p.steal)), Some(p.cpu)),
-                        ("Memory", fmt::pct(p.mem_pct()), format!("{} of {}", gb(p.mem_used()), gb(p.mem_total)), Some(p.mem_pct())),
+                    let tiles: [(&str, String, String, Option<(f64, f64)>); 6] = [
+                        ("CPU", fmt::pct(p.cpu), format!("waiting on disk {} · taken by host {}", fmt::pct(p.iowait), fmt::pct(p.steal)), Some((p.cpu, 0.0))),
+                        ("Memory", fmt::pct(p.programs_pct()), format!("{} used · {} cache of {}", gb(p.programs()), gb(p.caches()), gb(p.mem_total)), Some((p.programs_pct(), p.caches_pct()))),
                         (
                             "Swap",
                             if p.swap_total > 0.0 { fmt::pct(p.swap_pct()) } else { "None".into() },
                             if p.swap_total > 0.0 { format!("{} of {}", gb(p.swap_used), gb(p.swap_total)) } else { "No swap set up".into() },
-                            (p.swap_total > 0.0).then(|| p.swap_pct()),
+                            (p.swap_total > 0.0).then(|| (p.swap_pct(), 0.0)),
                         ),
-                        ("Load", format!("{:.2}", p.load1), format!("{:.2} · {:.2} · {} cores", p.load5, p.load15, cores), Some((p.load1 / cores * 100.0).min(100.0))),
+                        ("Load", format!("{:.2}", p.load1), format!("{:.2} · {:.2} · {} cores", p.load5, p.load15, cores), Some(((p.load1 / cores * 100.0).min(100.0), 0.0))),
                         ("Network", fmt::rate(p.net_rx + p.net_tx), format!("in {} · out {}", fmt::rate(p.net_rx), fmt::rate(p.net_tx)), None),
                         ("Disk I/O", fmt::rate(p.disk_read + p.disk_write), format!("read {} · write {} · busy {}", fmt::rate(p.disk_read), fmt::rate(p.disk_write), fmt::pct(p.disk_busy)), None),
                     ];
@@ -1660,7 +1707,8 @@ impl App {
                 let h = &self.history;
                 let pick = |f: fn(&db::Point) -> f64| -> Vec<(i64, f64)> { h.iter().map(|p| (p.ts, f(p))).collect() };
                 let cpu = pick(|p| p.cpu);
-                let mem = pick(|p| p.mem_pct());
+                let mem = pick(|p| p.programs_pct());
+                let cache = pick(|p| p.caches_pct());
                 let load = pick(|p| p.load1);
                 let rx = pick(|p| p.net_rx);
                 let tx = pick(|p| p.net_tx);
@@ -1675,7 +1723,7 @@ impl App {
                 ui.columns(2, |c| {
                     let spec = |id, title, value_fmt: fn(f64) -> String, y_max, tip| ChartSpec { id, title, value_fmt, y_max, height: 140.0, gap, x_range, marker, tip, bucket };
                     let (a, ha) = time_chart(&mut c[0], t, spec("cpu", "CPU", pct_fmt, Some(100.0), Tip::Cpu), &[("CPU", &cpu, t.accent)], &mut self.tips, &self.conn, &alias_s);
-                    let (b, hb) = time_chart(&mut c[1], t, spec("mem", "Memory", pct_fmt, Some(100.0), Tip::Mem), &[("Memory", &mem, t.accent)], &mut self.tips, &self.conn, &alias_s);
+                    let (b, hb) = time_chart(&mut c[1], t, spec("mem", "Memory", pct_fmt, Some(100.0), Tip::Mem), &[("Used", &mem, t.accent), ("Cache", &cache, t.accent2)], &mut self.tips, &self.conn, &alias_s);
                     c[0].add_space(8.0);
                     c[1].add_space(8.0);
                     let (cl, hl) = time_chart(&mut c[0], t, spec("load", "Load", load_fmt, None, Tip::Cpu), &[("Load", &load, t.accent)], &mut self.tips, &self.conn, &alias_s);

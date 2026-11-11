@@ -61,13 +61,15 @@ pub fn compute(conn: &Connection, server: &db::Server, from: i64, to: i64) -> db
     let latest = db::latest(conn, alias)?.filter(|p| now - p.ts < 120);
     let groups = db::live(conn, alias)?;
     if let Some(p) = &latest {
-        let avail_pct = if p.mem_total > 0.0 { p.mem_avail / p.mem_total * 100.0 } else { 100.0 };
+        // MemAvailable leaves out the ZFS cache, which ZFS gives back when programs need it.
+        let avail = p.mem_avail + p.zfs_cache();
+        let avail_pct = if p.mem_total > 0.0 { avail / p.mem_total * 100.0 } else { 100.0 };
         let top_mem = groups.iter().filter(|g| g.kind != Kind::Kernel).max_by(|a, b| a.mem.total_cmp(&b.mem));
         let who = top_mem.map(|g| format!(" The biggest user is {} with {}.", g.label, fmt::bytes(g.mem))).unwrap_or_default();
         if avail_pct < 5.0 {
-            add(&mut out, Level::Danger, "Memory is almost full", format!("Only {} of {} is free for programs.{who} Linux may start stopping programs.", fmt::bytes(p.mem_avail), fmt::bytes(p.mem_total)));
+            add(&mut out, Level::Danger, "Memory is almost full", format!("Only {} of {} is free for programs, counting caches Linux can give back.{who} Linux may start stopping programs.", fmt::bytes(avail), fmt::bytes(p.mem_total)));
         } else if avail_pct < 15.0 {
-            add(&mut out, Level::Warn, "Memory is running low", format!("{} of {} is free for programs.{who}", fmt::bytes(p.mem_avail), fmt::bytes(p.mem_total)));
+            add(&mut out, Level::Warn, "Memory is running low", format!("{} of {} is free for programs, counting caches Linux can give back.{who}", fmt::bytes(avail), fmt::bytes(p.mem_total)));
         }
         if p.arc > p.mem_total * 0.2 {
             add(
