@@ -42,7 +42,7 @@ echo @@pid; cat /proc/[0-9]*/stat 2>/dev/null; true"#;
 pub fn meta_script(pids: &[u32]) -> String {
     let list: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
     format!(
-        "for p in {}; do echo \"@@m $p\"; echo \"c $(grep -m1 -E '^0::|name=systemd' /proc/$p/cgroup 2>/dev/null)\"; echo \"u $(stat -c %U /proc/$p 2>/dev/null)\"; echo \"a $(tr '\\0\\n' '  ' </proc/$p/cmdline 2>/dev/null | head -c 400)\"; done",
+        "for p in {}; do echo \"@@m $p\"; echo \"c $(grep -m1 -E '^0::|name=systemd' /proc/$p/cgroup 2>/dev/null)\"; echo \"u $(stat -c %U /proc/$p 2>/dev/null)\"; echo \"a $(tr '\\0\\n' '  ' 2>/dev/null </proc/$p/cmdline | head -c 400)\"; done 2>/dev/null",
         list.join(" ")
     )
 }
@@ -355,7 +355,9 @@ impl Tracker {
             }
         }
         out.mounts.sort_by(|a, b| a.mount.cmp(&b.mount));
-        out.mounts.dedup_by(|a, b| a.fs == b.fs && a.size == b.size);
+        // Bind mounts show the same filesystem again under another path; keep the first.
+        let mut seen = std::collections::HashSet::new();
+        out.mounts.retain(|m| seen.insert((m.fs.clone(), m.size)));
         for l in get("vm") {
             if let Some(v) = l.strip_prefix("oom_kill ") {
                 out.oom_kills = v.trim().parse().unwrap_or(0);

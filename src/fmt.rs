@@ -8,9 +8,7 @@ pub fn bytes(b: f64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    if i == 0 {
-        format!("{v:.0} {}", UNITS[i])
-    } else if v >= 100.0 {
+    if i == 0 || v >= 100.0 {
         format!("{v:.0} {}", UNITS[i])
     } else {
         format!("{v:.1} {}", UNITS[i])

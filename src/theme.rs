@@ -19,7 +19,8 @@ pub struct Tokens {
     pub accent: Color32,
     pub accent_ink: Color32,
     pub accent_soft: Color32,
-    pub ok: Color32,
+    /// Second chart series (network out, disk write, ZFS cache), so it never reads as a warning.
+    pub accent2: Color32,
     pub warn: Color32,
     pub danger: Color32,
 }
@@ -39,7 +40,7 @@ pub const LIGHT: Tokens = Tokens {
     accent: hex(0x2a78d6),
     accent_ink: hex(0xffffff),
     accent_soft: hex(0xe3eefb),
-    ok: hex(0x008300),
+    accent2: hex(0x14a38b),
     warn: hex(0xb57a00),
     danger: hex(0xd23c3b),
 };
@@ -54,7 +55,7 @@ pub const DARK: Tokens = Tokens {
     accent: hex(0x3987e5),
     accent_ink: hex(0xffffff),
     accent_soft: hex(0x1f2a38),
-    ok: hex(0x2fa82f),
+    accent2: hex(0x2cc3a8),
     warn: hex(0xe0a020),
     danger: hex(0xe66767),
 };
@@ -178,13 +179,14 @@ pub fn card(t: &Tokens) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(14, 12))
 }
 
-/// Meter color by how full it is, like `.ssh-bar i` (75% warn, 90% danger).
+/// Meter color by how full it is (75% warn, 90% danger). Healthy meters use
+/// the plain accent, so color only stands out when something needs a look.
 pub fn level(t: &Tokens, pct: f64) -> Color32 {
     if pct >= 90.0 {
         t.danger
     } else if pct >= 75.0 {
         t.warn
     } else {
-        t.ok
+        t.accent
     }
 }

@@ -26,13 +26,13 @@ fn add(out: &mut Vec<Insight>, level: Level, title: impl Into<String>, detail: i
 pub fn connection_hint(status: &str, alias: &str) -> &'static str {
     let _ = alias;
     match status {
-        "timeout" => "Port 22 did not answer in time. The server may be off, or a firewall or your network is blocking SSH.",
-        "down" => "There is no route to the server from this PC. Check that it is on and that your network can reach it.",
-        "refused" => "The server answered but nothing is listening for SSH on that port.",
-        "dns" => "The host name in ~/.ssh/config could not be looked up.",
+        "timeout" => "Port 22 did not answer in time. The server may be off, or a firewall or your network is blocking SSH. JServer tries again by itself.",
+        "down" => "This PC could not reach the server. Check that it is on and that your network is connected. JServer tries again by itself.",
+        "refused" => "The server answered but nothing is listening for SSH on that port. JServer tries again by itself.",
+        "dns" => "The host name in ~/.ssh/config could not be looked up. JServer tries again by itself.",
         "denied" => "The server did not accept your key. Check that the public key is in ~/.ssh/authorized_keys on the server for this user. Fix that, then press Retry.",
         "hostkey" => "The server's host key is not in known_hosts, or it changed. JServer never accepts host keys by itself. Run ssh once in a terminal to check and accept it.",
-        "lost" => "The connection dropped and logging in again did not work. Press Retry when the server is back.",
+        "lost" => "The connection dropped and logging in again did not work yet. JServer tries again by itself, or press Retry.",
         _ => "",
     }
 }
@@ -88,15 +88,13 @@ pub fn compute(conn: &Connection, server: &db::Server, from: i64, to: i64) -> db
         }
     }
 
-    if let Some((min, max, first)) = db::oom_range(conn, alias, from, to)? {
-        if max > min {
-            add(
-                &mut out,
-                Level::Danger,
-                format!("Linux stopped {} program{} for lack of memory", max - min, if max - min == 1 { "" } else { "s" }),
-                format!("Out-of-memory kills since {}. Check which program grew in the memory chart around then.", fmt::day_time(first)),
-            );
-        }
+    if let Some((kills, first)) = db::oom_kills(conn, alias, from, to)?.filter(|(k, _)| *k > 0) {
+        add(
+            &mut out,
+            Level::Danger,
+            format!("Linux stopped {} program{} for lack of memory", kills, if kills == 1 { "" } else { "s" }),
+            format!("The first was around {}. Check which program grew in the memory chart around then.", fmt::day_time(first)),
+        );
     }
 
     let series = db::series(conn, alias, from, to, 60)?;

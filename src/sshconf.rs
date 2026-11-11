@@ -82,6 +82,50 @@ fn config_path() -> PathBuf {
     paths::ssh_dir().join("config")
 }
 
+/// `Include` paths can end in a wildcard (`Include config.d/*`), like ssh allows.
+fn include_paths(pattern: &Path) -> Vec<PathBuf> {
+    let name = pattern.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if !name.contains(['*', '?']) {
+        return vec![pattern.to_path_buf()];
+    }
+    let Some(dir) = pattern.parent() else { return Vec::new() };
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                .filter(|e| wildcard(&name, &e.file_name().to_string_lossy()))
+                .map(|e| e.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// `*` and `?` matching, case-insensitive like Windows file names.
+fn wildcard(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let (mut pi, mut ti, mut star, mut mark) = (0, 0, None, 0);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
 fn read_config(path: &Path, depth: u32, out: &mut Vec<String>) {
     let Ok(text) = std::fs::read_to_string(path) else { return };
     for line in text.lines() {
@@ -99,7 +143,9 @@ fn read_config(path: &Path, depth: u32, out: &mut Vec<String>) {
             for inc in rest.split_whitespace() {
                 let p = expand(inc.trim_matches('"'));
                 let p = if p.is_absolute() { p } else { paths::ssh_dir().join(p) };
-                read_config(&p, depth + 1, out);
+                for file in include_paths(&p) {
+                    read_config(&file, depth + 1, out);
+                }
             }
         }
     }
@@ -110,6 +156,18 @@ pub fn aliases() -> Vec<String> {
     let mut out = Vec::new();
     read_config(&config_path(), 0, &mut out);
     out
+}
+
+/// Like `aliases`, but None when the config exists and could not be read or
+/// came back empty (an editor in the middle of saving it), so callers do not
+/// mistake a bad read for "every server was removed".
+pub fn read_aliases() -> Option<Vec<String>> {
+    let path = config_path();
+    if !path.exists() {
+        return Some(Vec::new());
+    }
+    std::fs::read_to_string(&path).ok()?;
+    Some(aliases()).filter(|a| !a.is_empty())
 }
 
 fn expand(p: &str) -> PathBuf {

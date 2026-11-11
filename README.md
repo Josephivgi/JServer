@@ -17,7 +17,8 @@ It is JPerformance for servers.
 
 - Only read-only commands run on your servers (`/proc`, `/sys`, `df`, `docker ps`, `qm list`). Nothing is installed or written there.
 - Logins use `BatchMode=yes` and `StrictHostKeyChecking=yes`: JServer never prompts and never accepts a new or changed host key.
-- A login that fails is not retried on its own, so a rejected key does not get you banned by fail2ban. The server's card shows why and a Retry button.
+- A rejected key or an untrusted host key is not retried on its own, so you do not get banned by fail2ban. The server's card shows why and a Retry button.
+- Network problems (timed out, unreachable, connection lost, port closed, name not found) are retried on their own after 30 s, then 1, 2, 5, 10 and every 15 minutes, so monitoring comes back after your PC sleeps or the Wi-Fi drops. Retry still tries right away.
 - Only public key files (`*.pub`) are read.
 - Data stays on your PC in `%APPDATA%\JServer\jserver.db` (SQLite). History older than 30 days is removed.
 
@@ -37,7 +38,7 @@ $env:JSYSTEMS_APPS='all'; irm https://raw.githubusercontent.com/Josephivgi/JServ
 
 ## Requirements
 
-Windows 10 or 11 with the OpenSSH client (`ssh.exe`, built in), and hosts in `~/.ssh/config` that you can log in to with a key and no password prompt. Servers must run Linux.
+Windows 10 or 11 with the OpenSSH client (`ssh.exe`, built in), and hosts in `~/.ssh/config` that you can log in to with a key and no password prompt. `Include` lines are followed, including wildcards like `Include config.d/*`. Servers must run Linux.
 
 ## Build
 

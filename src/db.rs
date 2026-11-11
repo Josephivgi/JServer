@@ -351,10 +351,17 @@ pub fn write_minute(conn: &mut Connection, alias: &str, minute: i64, rows: &[Gro
 pub fn prune(conn: &Connection, before: i64) -> Result<usize> {
     let a = conn.execute("DELETE FROM samples WHERE ts < ?1", [before])?;
     let b = conn.execute("DELETE FROM group_minutes WHERE minute < ?1", [before])?;
-    Ok(a + b)
+    // Names of services and containers that no longer have any history.
+    let c = conn.execute(
+        "DELETE FROM groups WHERE NOT EXISTS (SELECT 1 FROM group_minutes m WHERE m.server = groups.server AND m.key = groups.key)",
+        [],
+    )?;
+    Ok(a + b + c)
 }
 
-/// Removes everything stored for servers no longer in ~/.ssh/config.
+/// Removes the live view and settings of servers no longer in ~/.ssh/config.
+/// Their history stays until it is older than the retention period, so a host
+/// that comes back keeps its charts.
 pub fn forget_servers_not_in(conn: &Connection, aliases: &[String]) -> Result<()> {
     let known: Vec<String> = conn.prepare("SELECT alias FROM servers")?.query_map([], |r| r.get(0))?.collect::<Result<_>>()?;
     for a in known.iter().filter(|a| !aliases.contains(a)) {
@@ -564,11 +571,15 @@ pub fn minutes_recorded(conn: &Connection, alias: &str, from: i64, to: i64) -> R
     )
 }
 
-/// (min, max) of the out-of-memory kill counter in a range, ignoring reboots.
-pub fn oom_range(conn: &Connection, alias: &str, from: i64, to: i64) -> Result<Option<(i64, i64, i64)>> {
+/// Out-of-memory kills in a range and when the first one was seen. The kernel's
+/// counter starts at 0 again after a reboot, so only rises between samples count.
+pub fn oom_kills(conn: &Connection, alias: &str, from: i64, to: i64) -> Result<Option<(i64, i64)>> {
     conn.query_row(
-        "SELECT MIN(oom_kills), MAX(oom_kills), MIN(ts) FROM samples WHERE server = ?1 AND ts BETWEEN ?2 AND ?3",
+        "SELECT SUM(oom_kills - prev), MIN(ts) FROM (
+             SELECT ts, oom_kills, LAG(oom_kills) OVER (ORDER BY ts) AS prev
+             FROM samples WHERE server = ?1 AND ts BETWEEN ?2 AND ?3
+         ) WHERE prev IS NOT NULL AND oom_kills > prev",
         params![alias, from, to],
-        |r| Ok(r.get::<_, Option<i64>>(0)?.zip(r.get::<_, Option<i64>>(1)?).zip(r.get::<_, Option<i64>>(2)?).map(|((a, b), c)| (a, b, c))),
+        |r| Ok(r.get::<_, Option<i64>>(0)?.zip(r.get::<_, Option<i64>>(1)?)),
     )
 }

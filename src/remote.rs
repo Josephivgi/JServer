@@ -37,10 +37,19 @@ pub fn classify(stderr: &str, timed_out: bool) -> Failure {
         ("refused", "Port closed")
     } else if s.contains("could not resolve") || s.contains("no such host") {
         ("dns", "Name not found")
-    } else if s.contains("no route") || s.contains("unreachable") {
+    } else if s.contains("no route") || s.contains("unreachable") || s.contains("network is down") {
         ("down", "Unreachable")
-    } else if s.contains("connection closed") || s.contains("connection reset") || s.contains("broken pipe") {
+    } else if s.contains("connection closed")
+        || s.contains("connection reset")
+        || s.contains("broken pipe")
+        || s.contains("client_loop")
+        || s.contains("ssh_packet_write")
+        || s.contains("send disconnect")
+    {
         ("lost", "Connection lost")
+    } else if s.contains("connect to host") {
+        // Windows OpenSSH says "Unknown error" when this PC has no network.
+        ("down", "Network error")
     } else {
         ("error", "Login failed")
     };
@@ -148,6 +157,9 @@ impl Session {
         if self.closed {
             return Err(Failure { status: "lost", label: "Connection lost", detail: "The SSH connection closed.".into() });
         }
+        // Only stderr from this script counts if it fails. Older lines (from a
+        // process that exited between two scripts, say) would give the wrong reason.
+        self.stderr.lock().unwrap().clear();
         let payload = format!("{script}\necho {END}\n");
         if self.stdin.write_all(payload.as_bytes()).and_then(|_| self.stdin.flush()).is_err() {
             return Err(self.failure(false));

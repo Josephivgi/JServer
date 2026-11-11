@@ -143,38 +143,47 @@ enum Sort {
     Cpu,
 }
 
-/// The tone of a status dot, like `.ssh-dot` in JAgents.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tone {
-    None,
-    Ok,
-    Busy,
-    Warn,
-    Danger,
-}
-
 /// The last login failed and the monitor is waiting for Retry.
 fn failed(status: &str) -> bool {
     !matches!(status, "up" | "connecting" | "paused" | "")
 }
 
-fn tone_of(status: &str) -> Tone {
+/// The color for a server status that is a problem, or None when nothing is
+/// wrong. Healthy states are plain muted text; only problems get color.
+fn problem_color(t: &Tokens, status: &str) -> Option<Color32> {
     match status {
-        "up" => Tone::Ok,
-        "connecting" => Tone::Busy,
-        "timeout" | "hostkey" | "lost" => Tone::Warn,
-        "" | "paused" => Tone::None,
-        _ => Tone::Danger,
+        "up" | "connecting" | "" | "paused" => None,
+        "timeout" | "down" | "dns" | "refused" | "lost" => Some(t.warn),
+        _ => Some(t.danger),
     }
 }
 
-fn tone_color(t: &Tokens, tone: Tone) -> Color32 {
-    match tone {
-        Tone::None => t.muted,
-        Tone::Ok => t.ok,
-        Tone::Busy => t.accent,
-        Tone::Warn => t.warn,
-        Tone::Danger => t.danger,
+/// A warning triangle with "!", shown next to the label of a problem.
+fn problem_icon(ui: &mut Ui, t: &Tokens, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(13.0, 13.0), Sense::hover());
+    let c = rect.center();
+    let pts = vec![Pos2::new(c.x, rect.top() + 0.5), Pos2::new(rect.right(), rect.bottom() - 0.5), Pos2::new(rect.left(), rect.bottom() - 0.5)];
+    ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    ui.painter().text(Pos2::new(c.x, c.y + 1.5), egui::Align2::CENTER_CENTER, "!", theme::bold_font(9.5), t.surface);
+}
+
+/// A server's status label: icon and color for a problem, muted text otherwise.
+/// `rtl` is set inside right-to-left layouts so the icon still comes first.
+fn status_label(ui: &mut Ui, t: &Tokens, status: &str, label: &str, size: f32, rtl: bool) {
+    match problem_color(t, status) {
+        Some(c) => {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if rtl {
+                ui.label(RichText::new(label).size(size).color(c));
+                problem_icon(ui, t, c);
+            } else {
+                problem_icon(ui, t, c);
+                ui.label(RichText::new(label).size(size).color(c));
+            }
+        }
+        None => {
+            ui.label(RichText::new(label).size(size).color(t.muted));
+        }
     }
 }
 
@@ -540,20 +549,6 @@ impl eframe::App for App {
 
 // ---------- small widgets, after the JAgents CSS ----------
 
-fn dot(ui: &mut Ui, t: &Tokens, tone: Tone) {
-    let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-    let mut c = tone_color(t, tone);
-    match tone {
-        Tone::None => c = c.gamma_multiply(0.5),
-        Tone::Busy => {
-            let phase = (ui.input(|i| i.time) * std::f64::consts::PI).sin().abs() as f32;
-            c = c.gamma_multiply(0.35 + 0.65 * phase);
-        }
-        _ => {}
-    }
-    ui.painter().circle_filled(rect.center(), 4.0, c);
-}
-
 /// A circular arrow, like JAgents' "restart" icon.
 fn paint_restart(ui: &Ui, center: Pos2, r: f32, color: Color32) {
     let stroke = Stroke::new(1.6, color);
@@ -692,17 +687,21 @@ fn uptime(secs: i64) -> String {
     if d >= 1 { format!("{d} d {h} h") } else { format!("{h} h {} min", (secs % 3600) / 60) }
 }
 
-/// How a key or a server finding reads in a list: colored dot plus text.
+/// How a key or a server finding reads in a list: a warning icon for problems
+/// (none for plain information), then the title and detail.
 fn finding_row(ui: &mut Ui, t: &Tokens, level: Level, title: &str, detail: &str) {
     ui.horizontal_top(|ui| {
-        ui.add_space(2.0);
         ui.vertical(|ui| {
-            ui.add_space(5.0);
-            let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-            ui.painter().circle_filled(rect.center(), 3.5, level_color(t, level));
+            ui.add_space(2.0);
+            if level == Level::Info {
+                ui.allocate_exact_size(vec2(13.0, 13.0), Sense::hover());
+            } else {
+                problem_icon(ui, t, level_color(t, level));
+            }
         });
         ui.vertical(|ui| {
-            ui.label(RichText::new(title).font(theme::bold_font(13.0)).color(t.ink));
+            let color = if level == Level::Info { t.ink } else { level_color(t, level) };
+            ui.label(RichText::new(title).font(theme::bold_font(13.0)).color(color));
             if !detail.is_empty() {
                 ui.label(RichText::new(detail).size(12.5).color(t.muted));
             }
@@ -769,11 +768,9 @@ impl App {
                         _ => v.label().to_string(),
                     };
                     let resp = side_item(ui, t, on, |ui| {
-                        dot(ui, t, tone_of(&v.srv.status));
-                        ui.add_space(1.0);
                         ui.label(RichText::new(&v.srv.alias).size(13.0).color(t.ink));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(when).size(11.0).color(t.muted));
+                            status_label(ui, t, &v.srv.status, &when, 11.0, true);
                         });
                     });
                     let tip = format!("{} · {}", v.srv.alias, v.label());
@@ -852,9 +849,13 @@ impl App {
                         self.start_collector();
                     }
                     ui.horizontal(|ui| {
-                        dot(ui, t, if self.collector_running { Tone::Ok } else { Tone::Warn });
-                        let text = if self.collector_running { format!("Watching {watching} servers in background") } else { "Background monitor stopped".into() };
-                        ui.label(RichText::new(text).size(12.0).color(t.ink));
+                        if self.collector_running {
+                            ui.label(RichText::new(format!("Watching {watching} servers in background")).size(12.0).color(t.ink));
+                        } else {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            problem_icon(ui, t, t.warn);
+                            ui.label(RichText::new("Background monitor stopped").size(12.0).color(t.warn));
+                        }
                     });
                     let r = ui.min_rect();
                     ui.painter().line_segment([Pos2::new(r.left() - 16.0, r.top() - 10.0), Pos2::new(r.right() + 12.0, r.top() - 10.0)], Stroke::new(1.0, t.line));
@@ -1044,13 +1045,10 @@ fn server_card(ui: &mut Ui, t: &Tokens, v: &View, host: Option<&sshconf::Host>, 
             ui.set_width(ui.available_width());
             let top = ui.min_rect().top();
             ui.spacing_mut().item_spacing.y = 6.0;
-            let tone = tone_of(&v.srv.status);
             ui.horizontal(|ui| {
-                dot(ui, t, tone);
                 ui.label(RichText::new(&v.srv.alias).font(theme::bold_font(13.5)).color(t.ink));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let c = if tone == Tone::None { t.muted } else { tone_color(t, tone) };
-                    ui.label(RichText::new(v.label()).size(12.0).color(c));
+                    status_label(ui, t, &v.srv.status, v.label(), 12.0, true);
                 });
             });
             if let Some(h) = host {
@@ -1306,9 +1304,12 @@ impl App {
                         egui::Frame::new().inner_margin(egui::Margin { left: 12, right: 12, top: 0, bottom: 8 }).show(ui, |ui| {
                             for f in shown {
                                 ui.horizontal(|ui| {
-                                    let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                                    ui.painter().circle_filled(rect.center(), 3.0, level_color(t, ssh_level(f.level)));
-                                    ui.label(RichText::new(&f.text).size(12.0).color(if f.level == sshconf::Level::Info { t.muted } else { level_color(t, ssh_level(f.level)) }));
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    let color = if f.level == sshconf::Level::Info { t.muted } else { level_color(t, ssh_level(f.level)) };
+                                    if f.level != sshconf::Level::Info {
+                                        problem_icon(ui, t, color);
+                                    }
+                                    ui.label(RichText::new(&f.text).size(12.0).color(color));
                                 });
                             }
                         });
@@ -1402,11 +1403,7 @@ impl App {
                                 ui.label(RichText::new(keys.join(", ")).font(theme::mono(12.0)).color(t.muted));
                                 match self.view(&h.alias) {
                                     Some(v) => {
-                                        let tone = tone_of(&v.srv.status);
-                                        ui.horizontal(|ui| {
-                                            dot(ui, t, tone);
-                                            ui.label(RichText::new(v.label()).size(12.5).color(if tone == Tone::None { t.muted } else { tone_color(t, tone) }));
-                                        });
+                                        ui.horizontal(|ui| status_label(ui, t, &v.srv.status, v.label(), 12.5, false));
                                     }
                                     None => {
                                         ui.label("");
@@ -1468,10 +1465,9 @@ impl App {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.horizontal(|ui| {
-                    dot(ui, t, tone_of(&status));
                     ui.label(RichText::new(alias).font(theme::bold_font(15.0)).color(t.ink));
-                    let tone = tone_of(&status);
-                    ui.label(RichText::new(&label).size(12.5).color(if tone == Tone::None { t.muted } else { tone_color(t, tone) }));
+                    ui.add_space(4.0);
+                    status_label(ui, t, &status, &label, 12.5, false);
                 });
                 if let Some(h) = &host {
                     ui.horizontal(|ui| {
@@ -1499,7 +1495,11 @@ impl App {
             if enabled {
                 let _ = db::set_status(&self.conn, alias, "paused", "Paused", "", chrono::Utc::now().timestamp());
             } else {
-                let _ = db::bump_retry(&self.conn);
+                // Only this server logs in again; other servers that failed keep waiting.
+                let _ = db::bump_server_retry(&self.conn, alias);
+                if !collector::is_running() {
+                    self.start_collector();
+                }
             }
             self.last_live = None;
         }
@@ -1530,7 +1530,12 @@ impl App {
                     };
                     theme::card(t).show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        finding_row(ui, t, if matches!(tone_of(&v.srv.status), Tone::Danger | Tone::Warn) { Level::Danger } else { Level::Info }, &title, &detail);
+                        let level = match problem_color(t, &v.srv.status) {
+                            Some(c) if c == t.danger => Level::Danger,
+                            Some(_) => Level::Warn,
+                            None => Level::Info,
+                        };
+                        finding_row(ui, t, level, &title, &detail);
                         if let Some(p) = &v.latest {
                             ui.add_space(4.0);
                             ui.label(RichText::new(format!("Last sample {}. The history below is from before.", fmt::ago(p.ts))).size(12.0).color(t.muted));
@@ -1671,9 +1676,9 @@ impl App {
                     c[0].add_space(8.0);
                     c[1].add_space(8.0);
                     let (cl, hl) = time_chart(&mut c[0], t, spec("load", "Load", load_fmt, None, Tip::Cpu), &[("Load", &load, t.accent)], &mut self.tips, &self.conn, &alias_s);
-                    let (d, hd) = time_chart(&mut c[1], t, spec("net", "Network", rate_fmt, None, Tip::None), &[("In", &rx, t.accent), ("Out", &tx, t.ok)], &mut self.tips, &self.conn, &alias_s);
+                    let (d, hd) = time_chart(&mut c[1], t, spec("net", "Network", rate_fmt, None, Tip::None), &[("In", &rx, t.accent), ("Out", &tx, t.accent2)], &mut self.tips, &self.conn, &alias_s);
                     c[0].add_space(8.0);
-                    let (e, he) = time_chart(&mut c[0], t, spec("disk", "Disk I/O", rate_fmt, None, Tip::None), &[("Read", &rd, t.accent), ("Write", &wr, t.warn)], &mut self.tips, &self.conn, &alias_s);
+                    let (e, he) = time_chart(&mut c[0], t, spec("disk", "Disk I/O", rate_fmt, None, Tip::None), &[("Read", &rd, t.accent), ("Write", &wr, t.accent2)], &mut self.tips, &self.conn, &alias_s);
                     clicked_ts = a.or(b).or(cl).or(d).or(e);
                     hovered = ha.or(hb).or(hl).or(hd).or(he);
                 });
@@ -1697,7 +1702,7 @@ fn memory_card(ui: &mut Ui, t: &Tokens, v: &View, p: &db::Point) {
     let free = p.mem_free.max(0.0);
     let segs: Vec<(&str, f64, Color32)> = [
         ("Programs", programs, t.accent),
-        ("ZFS cache", arc, t.warn),
+        ("ZFS cache", arc, t.accent2),
         ("File cache, freed when needed", cache, t.accent.gamma_multiply(0.35)),
         ("Free", free, t.well),
     ]
